@@ -8,7 +8,7 @@ one-task-per-iteration loop.
 ## Install
 
 ```bash
-go install github.com/klampa/ralph-cli/cmd/ralph@v0.1.0
+go install github.com/klampatech/ralph-cli/cmd/ralph@v0.1.1
 ```
 
 Or download a release binary from the [GitHub Releases](../../releases) page
@@ -86,7 +86,7 @@ go test ./...
 go test -tags=integration ./...
 
 # Inject version at build time
-go build -ldflags "-X github.com/klampa/ralph-cli/internal/version.Version=v0.1.0" -o ralph ./cmd/ralph
+go build -ldflags "-X github.com/klampa/ralph-cli/internal/version.Version=v0.1.1" -o ralph ./cmd/ralph
 ```
 
 ## License
