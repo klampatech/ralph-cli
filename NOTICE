@@ -1,16 +1,15 @@
 ralph-cli
 Copyright 2026 Kyle Lampa
 
-This product includes software developed by
-Kyle Lampa (https://github.com/klampa).
+This product includes software developed by third parties:
 
-================================================================================
-Bundled Templates
-================================================================================
+────────────────────────────────────────────────────────────────────────
+Ralph file templates (bundled into the ralph-cli binary via embed.FS)
+────────────────────────────────────────────────────────────────────────
 
-The following template files bundled in this project are copied from
-Clayton Farr's "Ralph Playbook" repository and are licensed under the MIT
-License:
+The following files in `internal/scaffold/templates/` are derived from
+the [ClaytonFarr/ralph-playbook](https://github.com/ClaytonFarr/ralph-playbook)
+project and are reused under the MIT License:
 
   - PROMPT_build.md
   - PROMPT_plan.md
@@ -19,45 +18,35 @@ License:
   - IMPLEMENTATION_PLAN.md
   - loop.sh
 
-  Source: https://github.com/ClaytonFarr/ralph-playbook
-  Copyright: Copyright (c) Clayton Farr
-  License: MIT
+Original authors:
+  - Clayton Farr (https://github.com/ClaytonFarr) — primary author of
+    the ralph-playbook and the canonical Ralph prompt templates.
+  - Geoff Huntley (https://github.com/geoffhuntley) — co-creator of
+    the Ralph methodology and the "playbook" packaging pattern.
 
---------------------------------------------------------------------------------
-Original Ralph Philosophy
---------------------------------------------------------------------------------
+ClaytonFarr/ralph-playbook is licensed under the MIT License:
 
-The "Ralph Wiggum technique" and the underlying methodology of running a coding
-agent in a continuous, one-task-per-iteration loop with file-based shared
-state was coined by:
+  MIT License
+  Copyright (c) Clayton Farr
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject
+  to the following conditions:
 
-  Geoff Huntley (https://ghuntley.com/)
-  Copyright (c) Geoff Huntley
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
 
-  The methodology itself is not a specific software work and is not subject
-  to copyright; it is the conceptual framework that this CLI is designed to
-  operationalize. Attribution is included in the README and project
-  documentation in keeping with the open-source conventions of the Ralph
-  community.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+  ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
 
-================================================================================
-Third-Party Dependencies
-================================================================================
-
-This project uses the following third-party Go libraries (resolved at
-implementation time; see go.mod for exact versions):
-
-  - github.com/spf13/cobra   — Apache 2.0 License
-  - github.com/spf13/viper   — Apache 2.0 License (optional)
-
-Full license texts for these dependencies are reproduced in their
-respective upstream repositories and are not duplicated here.
-
-================================================================================
-Trademarks
-================================================================================
-
-"Ralph" as referenced in this project refers to the methodology and tooling
-described above. "Claude Code" is a trademark of Anthropic. This project is
-not affiliated with, endorsed by, or sponsored by Anthropic PBC or Clayton
-Farr, except where the bundled template files are explicitly attributed.
+────────────────────────────────────────────────────────────────────────
+End of NOTICE.
