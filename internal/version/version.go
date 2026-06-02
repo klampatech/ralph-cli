@@ -2,7 +2,7 @@
 //
 // Version, Commit, and Date are injected at build time via -ldflags:
 //
-//	-X github.com/klampa/ralph-cli/internal/version.Version=v0.1.0
+//	-X github.com/klampa/ralph-cli/internal/version.Version=v0.1.1
 //	-X github.com/klampa/ralph-cli/internal/version.Commit=$(git rev-parse HEAD)
 //	-X github.com/klampa/ralph-cli/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 package version
