@@ -47,17 +47,14 @@ func TestBundledFilesCount(t *testing.T) {
 
 // TestBundledFilesChmod ensures loop.sh is executable and prompts are not.
 func TestBundledFilesChmod(t *testing.T) {
-	for _, bf := range BundledFiles {
-		wantMode := bf.Mode
-		if got := bf.Mode & 0o111; (got == 0) != (wantMode&0o111 == 0) {
-			t.Errorf("file %q: mode %o is unexpectedly executable/in-executable", bf.Dest, bf.Mode)
-		}
-	}
 	// Spot-check: loop.sh is the only executable.
 	execCount := 0
 	for _, bf := range BundledFiles {
 		if bf.Mode&0o111 != 0 {
 			execCount++
+			if bf.Dest != "loop.sh" {
+				t.Errorf("file %q is unexpectedly executable (mode %s)", bf.Dest, bf.Mode)
+			}
 		}
 	}
 	if execCount != 1 {
