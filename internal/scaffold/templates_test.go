@@ -3,6 +3,7 @@ package scaffold
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,53 @@ func TestBundledFilesChmod(t *testing.T) {
 	}
 	if execCount != 1 {
 		t.Errorf("expected exactly 1 executable file, got %d", execCount)
+	}
+}
+
+// TestPROMPTBuildHasTagPolicy guards against the v0.1.1 regression where
+// the build prompt told Claude to tag on every clean test pass (issue #3).
+// v0.1.2's rule 9999999 must mention "every 5" or similar throttle, AND
+// must NOT contain the v0.1.1 "no build or test errors" trigger.
+func TestPROMPTBuildHasTagPolicy(t *testing.T) {
+	data, err := Read("templates/PROMPT_build.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "9999999.") {
+		t.Error("PROMPT_build.md missing the 9999999. tag-policy rule")
+	}
+	// Must mention the "every 5th" throttle somewhere in the rule.
+	if !strings.Contains(s, "every 5") {
+		t.Errorf("PROMPT_build.md tag policy should throttle to every 5th iter; got:\n%s", s)
+	}
+	// Must NOT contain the v0.1.1 trigger phrase that produced spurious tags.
+	if strings.Contains(s, "As soon as there are no build or test errors") {
+		t.Error("PROMPT_build.md still has the v0.1.1 spurious-tag trigger phrase")
+	}
+	// Must NOT contain the v0.1.1 catch-all "create a git tag" without context.
+	if strings.Contains(s, "create a git tag.") {
+		t.Error("PROMPT_build.md still has the bare 'create a git tag.' rule")
+	}
+}
+
+// TestPROMPTBuildMandatesPlanUpdate guards against the v0.1.1 regression
+// where the loop never prompted Claude to update IMPLEMENTATION_PLAN.md
+// after a commit (issue #5). v0.1.2's rule 999999999 must be marked
+// MANDATORY and must require flipping `- [ ]` to `- [x]`.
+func TestPROMPTBuildMandatesPlanUpdate(t *testing.T) {
+	data, err := Read("templates/PROMPT_build.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "999999999.") {
+		t.Error("PROMPT_build.md missing the 999999999. plan-update rule")
+	}
+	if !strings.Contains(s, "MANDATORY") {
+		t.Error("PROMPT_build.md plan-update rule should be marked MANDATORY")
+	}
+	if !strings.Contains(s, "[x]") {
+		t.Error("PROMPT_build.md plan-update rule should mention flipping to [x]")
 	}
 }
