@@ -123,10 +123,46 @@ func TestIntegrationStatusJSON(t *testing.T) {
 		t.Fatalf("ralph status --json: %v\nstderr: %s", err, stderr.String())
 	}
 	out := stdout.String()
+	// Raw state fields (v0.1.1 contract).
 	for _, want := range []string{`"schema_version": 1`, `"harness": "claude"`, `"loop_count": 0`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status --json missing %q in:\n%s", want, out)
 		}
+	}
+	// v0.1.2 derived fields (issue #7). last_commit_at is conditional
+	// (only present when there's a commit), so we don't assert on it.
+	for _, want := range []string{
+		`"current_task"`,
+		`"next_task"`,
+		`"progress_pct"`,
+		`"iterations_remaining"`,
+		`"plan_exhausted"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status --json (v0.1.2) missing derived field %q in:\n%s", want, out)
+		}
+	}
+}
+
+// TestIntegrationStatusExplicitPathMissing is a smoke test for issue #6:
+// `ralph status <path>` must error out cleanly when <path> has no
+// .ralph/, instead of silently using a parent .ralph/.
+func TestIntegrationStatusExplicitPathMissing(t *testing.T) {
+	bin := ralphBin(t)
+	parent := t.TempDir()
+	mkdir(t, filepath.Join(parent, ".git"))
+	runRalph(t, bin, "init", parent)
+	// Make a child dir with NO .ralph/ inside.
+	child := filepath.Join(parent, "no-ralph-child")
+	mkdir(t, child)
+	// Status with explicit child path → must error (exit 6).
+	cmd := exec.Command(bin, "status", child)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("ralph status %s with no .ralph/ should error; got: %s", child, out)
+	}
+	if !strings.Contains(string(out), "no .ralph/") {
+		t.Errorf("error should mention 'no .ralph/', got: %s", out)
 	}
 }
 
