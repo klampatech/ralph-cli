@@ -2,7 +2,9 @@ package scaffold
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/klampa/ralph-cli/internal/state"
@@ -242,6 +244,98 @@ func TestScaffoldPreservesExistingGitignoreEntry(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected exactly 1 .ralph/ line, got %d:\n%s", count, string(gi))
+	}
+}
+
+func TestScaffoldUntracksPreviouslyTrackedRalph(t *testing.T) {
+	dir := makeGitRepo(t)
+	// Init a real git repo (not just .git/ as a dir), commit a .ralph/ file,
+	// then run Scaffold — the file should end up untracked in the index.
+	run := func(name string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+		return string(out)
+	}
+	run("git", "init", "-q")
+	run("git", "config", "user.email", "t@t")
+	run("git", "config", "user.name", "test")
+	// First scaffold to create .ralph/, then commit it.
+	if _, err := Scaffold(dir, Options{}); err != nil {
+		t.Fatalf("first scaffold: %v", err)
+	}
+	run("git", "add", "-A")
+	run("git", "commit", "-q", "-m", "initial: tracked .ralph/ files")
+	// Now re-scaffold with --force. untrackRalph should remove the
+	// .ralph/ files from the index without deleting them on disk.
+	if _, err := Scaffold(dir, Options{Force: true}); err != nil {
+		t.Fatalf("force scaffold: %v", err)
+	}
+	// ls-files --error-unmatch returns non-zero if the file is NOT tracked.
+	ls := exec.Command("git", "ls-files", ".ralph/PROMPT_build.md")
+	ls.Dir = dir
+	if out, err := ls.Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		t.Errorf(".ralph/PROMPT_build.md still tracked after force scaffold:\n%s", out)
+	}
+	// But the file must still exist on disk.
+	if _, err := os.Stat(filepath.Join(dir, ".ralph", "PROMPT_build.md")); err != nil {
+		t.Errorf(".ralph/PROMPT_build.md missing from disk: %v", err)
+	}
+	// And status must be clean: only the new .gitignore from this run
+	// should show up (the .ralph/ files were already in HEAD, so removing
+	// them from the index is recorded as a delete which the user can then
+	// commit; the .gitignore from before is gone, the new one staged).
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = dir
+	statusOut, _ := statusCmd.Output()
+	hasRalphInStatus := false
+	for _, line := range strings.Split(string(statusOut), "\n") {
+		if strings.Contains(line, ".ralph/") {
+			hasRalphInStatus = true
+			break
+		}
+	}
+	if hasRalphInStatus {
+		t.Errorf("git status should not show .ralph/ as modified after untrack, got:\n%s", statusOut)
+	}
+}
+
+func TestScaffoldUntrackRalphNoOpOnFreshRepo(t *testing.T) {
+	// Fresh init with no previously-tracked .ralph/ — untrackRalph is a
+	// no-op, no error, no git commands run.
+	dir := makeGitRepo(t)
+	// Real git init so untrackRalph's `git ls-files` works.
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "test")
+	if _, err := Scaffold(dir, Options{}); err != nil {
+		t.Fatalf("Scaffold: %v", err)
+	}
+	// Status should be clean: .gitignore added (staged), .ralph/ created
+	// but not tracked. No untrackRalph failure.
+	stCmd := exec.Command("git", "status", "--porcelain")
+	stCmd.Dir = dir
+	out, _ := stCmd.Output()
+	if strings.Contains(string(out), ".ralph/") {
+		t.Errorf("fresh init should not have .ralph/ in git status:\n%s", out)
 	}
 }
 

@@ -6,7 +6,9 @@ package scaffold
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/klampa/ralph-cli/internal/state"
@@ -122,6 +124,17 @@ func Scaffold(root string, opts Options) (Result, error) {
 		}
 	}
 
+	// 7. Untrack any .ralph/ files that were already tracked in git.
+	// Issue #4 (v0.1.2): without this, `git add -A` after init would stage
+	// the .gitignore change but the previously-tracked .ralph/ files would
+	// remain tracked. Best-effort: a `git rm` failure (no git, no
+	// tracking, etc.) is non-fatal — the .gitignore + init files we
+	// just wrote still accomplish the user's goal.
+	if !opts.NoGitignore {
+		// Best-effort: never block init on a git-tracking cleanup.
+		_ = untrackRalph(root)
+	}
+
 	return res, nil
 }
 
@@ -173,6 +186,51 @@ func trimWhitespace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// untrackRalph removes .ralph/ from the git index (without deleting the
+// files on disk) when it has been previously tracked.
+//
+// Issue #4 (v0.1.2): if a user runs `ralph init` in a repo that already
+// has .ralph/ files committed (e.g. an existing ralph project), the
+// .gitignore entry added by Scaffold alone does not untrack them — the
+// files stay in the index, and `git add -A` keeps staging changes to
+// them. `git rm -r --cached .ralph/` removes them from the index while
+// leaving the on-disk copies intact.
+//
+// Best-effort: returns nil on any failure (no .git, no .ralph/ in index,
+// etc.). Callers should not block init on this.
+func untrackRalph(root string) error {
+	// Only attempt if this is actually a git repo. Caller already checks
+	// for .git/, but re-check defensively.
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		return nil
+	}
+	// Only attempt if .ralph/ exists on disk. After Scaffold it always
+	// does, but be defensive in case the caller is using a custom flow.
+	if _, err := os.Stat(filepath.Join(root, ".ralph")); err != nil {
+		return nil
+	}
+	// `git ls-files` lists tracked files. If none match .ralph/, skip.
+	ls := exec.Command("git", "ls-files", ".ralph/")
+	ls.Dir = root
+	out, err := ls.Output()
+	if err != nil {
+		return nil // not a git repo or git unavailable — ignore
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return nil // nothing tracked under .ralph/, nothing to do
+	}
+	// Untrack. We ignore the error: `git rm -r --cached` may fail on
+	// edge cases (submodule, etc.) and the user can clean up manually.
+	rm := exec.Command("git", "rm", "-r", "--cached", ".ralph/")
+	rm.Dir = root
+	// Silence stderr/stdout; the user will see the resulting "deleted"
+	// lines on the next `git status` anyway.
+	if out, err := rm.CombinedOutput(); err != nil {
+		return fmt.Errorf("git rm --cached .ralph/: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 
