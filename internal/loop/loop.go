@@ -51,7 +51,21 @@ type Options struct {
 	Stdout         io.Writer     // harness stdout; defaults to os.Stdout
 	Stderr         io.Writer     // harness stderr; defaults to os.Stderr
 	Now            func() time.Time // for deterministic tests
+
+	// PlanExhaustedStaleIters is the number of consecutive iterations
+	// without a new commit at which a fully-checked plan triggers
+	// ||RALPH_SIGNAL:PLAN_EXHAUSTED||. Default 3 if zero.
+	// Issue #2 (v0.1.2).
+	PlanExhaustedStaleIters int
 }
+
+// PlanExhaustedSignal is the sentinel the loop prints to stdout when it
+// detects that the plan is complete and no new work has been committed in
+// the last PlanExhaustedStaleIters iterations. Downstream tooling (CI,
+// monitoring) greps for this exact string.
+//
+// Issue #2 (v0.1.2).
+const PlanExhaustedSignal = "||RALPH_SIGNAL:PLAN_EXHAUSTED||"
 
 // Run executes the loop. Returns the exit code per SPEC §8 on completion
 // (0 ok, 1 generic, 2 aborted, 4 harness-missing, 5 not-in-git, 6 config-invalid).
@@ -88,6 +102,10 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 	if opt.Model == "" {
 		opt.Model = st.Config.Model
 	}
+	planStaleThreshold := opt.PlanExhaustedStaleIters
+	if planStaleThreshold == 0 {
+		planStaleThreshold = 3
+	}
 
 	// Build the event emitter. If --json, emit to stdout; otherwise to io.Discard.
 	var emitter *events.Emitter
@@ -119,6 +137,12 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 
 	// Main loop.
 	iter := 0
+	// staleIters counts consecutive iterations without a new commit.
+	// Used by plan-exhausted detection (issue #2).
+	staleIters := 0
+	// prevLastCommit tracks the last commit SHA we observed; if it
+	// changes after a build iter, the harness produced a new commit.
+	prevLastCommit := st.LastCommit
 	for {
 		// Abort check (SPEC §7.1 step 2).
 		aborted, err := state.IsAbortRequested(root)
@@ -142,6 +166,26 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 			return 0, nil
 		}
 
+		// Plan-exhausted check (issue #2, v0.1.2). If the plan file has
+		// no unchecked `- [ ]` items AND we have not produced a new
+		// commit in the last planStaleThreshold iterations, emit the
+		// sentinel and exit 0. The sentinel goes to stdout (where CI
+		// greps) AND to the audit log.
+		if iter > 0 && staleIters >= planStaleThreshold {
+			unchecked, perr := countUncheckedPlanItems(root)
+			if perr == nil && unchecked == 0 {
+				_ = emitter.Info(events.EventRunEnd, map[string]any{
+					"exit_code":  0,
+					"iterations": iter,
+					"reason":     "plan_exhausted",
+					"stale_iters": staleIters,
+				})
+				// Print the sentinel to stdout for downstream tooling.
+				fmt.Fprintln(opt.Stdout, PlanExhaustedSignal)
+				return 0, nil
+			}
+		}
+
 		// Run one iteration (SPEC §7.1 step 4).
 		if err := runOne(ctx, root, h, opt.Mode, iter, st, opt, emitter); err != nil {
 			_ = emitter.EmitError("iteration_failed", err.Error())
@@ -155,7 +199,7 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 				committed = gitCommit(root, iter, opt)
 			}
 			if !opt.NoPush && committed {
-				gitPush(root, emitter)
+				gitPush(root, emitter, opt)
 			}
 		}
 
@@ -172,6 +216,17 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 		}
 		if err := state.Save(root, st); err != nil {
 			return 1, fmt.Errorf("save state: %w", err)
+		}
+
+		// Track commit progress for plan-exhausted detection. If the
+		// LastCommit SHA didn't change since the previous iter, the
+		// harness either made no changes or its work was not committed
+		// (e.g. a no-op iteration). Count those as stale.
+		if st.LastCommit != prevLastCommit && st.LastCommit != "" {
+			staleIters = 0
+			prevLastCommit = st.LastCommit
+		} else {
+			staleIters++
 		}
 
 		iter++
@@ -405,17 +460,32 @@ func gitCommit(root string, iter int, opt Options) bool {
 
 // gitPush pushes origin <branch>. Per SPEC §7.3, push is best-effort
 // (warn-and-continue on failure) — never force-push.
-func gitPush(root string, emitter *events.Emitter) {
+//
+// Issue #8 (v0.1.2): if no `origin` remote is configured, suppress the
+// noise — don't print "git push failed" on every iter. We detect this
+// via `git remote get-url origin` and short-circuit.
+func gitPush(root string, emitter *events.Emitter, opt Options) {
 	branchCmd := exec.Command("git", "branch", "--show-current")
 	branchCmd.Dir = root
 	branchBytes, err := branchCmd.Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ralph: git branch failed: %v\n", err)
+		fmt.Fprintf(opt.Stderr, "ralph: git branch failed: %v\n", err)
 		return
 	}
 	branch := strings.TrimSpace(string(branchBytes))
 	if branch == "" {
-		fmt.Fprintln(os.Stderr, "ralph: cannot push: no current branch")
+		fmt.Fprintln(opt.Stderr, "ralph: cannot push: no current branch")
+		return
+	}
+
+	// Issue #8 (v0.1.2): when there is no origin remote, do nothing
+	// quietly. Local-only projects should not see a "git push failed"
+	// warning on every iteration.
+	if !hasOriginRemote(root) {
+		// No origin. Emit a single "skip" event for audit, then return.
+		_ = emitter.Info(events.EventPushSkipped, map[string]string{
+			"reason": "no_origin_remote",
+		})
 		return
 	}
 
@@ -426,7 +496,7 @@ func gitPush(root string, emitter *events.Emitter) {
 		push = exec.Command("git", "push", "-u", "origin", "HEAD")
 		push.Dir = root
 		if out2, err2 := push.CombinedOutput(); err2 != nil {
-			fmt.Fprintf(os.Stderr, "ralph: git push failed (continuing): %v\n%s\n%s\n", err, out, out2)
+			fmt.Fprintf(opt.Stderr, "ralph: git push failed (continuing): %v\n%s\n%s\n", err, out, out2)
 			return
 		}
 	}
@@ -452,6 +522,24 @@ func lastCommitSHA(root string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// hasOriginRemote reports whether the local git repo at root has an
+// `origin` remote configured. Used by gitPush to decide whether to
+// print the "no origin" skip event or attempt a real push.
+//
+// Issue #8 (v0.1.2): without this check, every iter on a local-only
+// project would print "git push failed" noise.
+//
+// Returns false on any error (no git, no repo, no remote) — treating
+// all of those the same: don't try to push.
+func hasOriginRemote(root string) bool {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = root
+	if _, err := cmd.Output(); err != nil {
+		return false
+	}
+	return true
+}
+
 // hashPlan returns a stable hash of .ralph/IMPLEMENTATION_PLAN.md, or "" if
 // the file is missing. Used to detect "the plan is unchanged across N iters"
 // in `ralph status`.
@@ -462,6 +550,38 @@ func hashPlan(root string) (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// countUncheckedPlanItems returns the number of "- [ ]" (unchecked)
+// markdown checkboxes in .ralph/IMPLEMENTATION_PLAN.md. Returns 0 and
+// no error if the file is missing (treats missing = empty plan =
+// exhausted, which is the conservative default).
+//
+// Issue #2 (v0.1.2): plan-exhausted detection. We deliberately do not
+// parse prd.json — SPEC §2 says the CLI is a thin launcher, and the
+// canonical plan the loop drives is the markdown file the harness reads
+// & writes via the "## Ralph State / IMPLEMENTATION_PLAN.md" block.
+//
+// Matches both "- [ ]" and "* [ ]" (and "  - [ ]" with leading
+// whitespace). Stops counting at the first line that doesn't look like
+// a checkbox to be cheap; callers use the count to detect "zero left",
+// not exact progression.
+func countUncheckedPlanItems(root string) (int, error) {
+	b, err := os.ReadFile(filepath.Join(root, ".ralph", "IMPLEMENTATION_PLAN.md"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "* [ ]") {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // lastNonEmptyLine returns the last non-empty trimmed line of r's current

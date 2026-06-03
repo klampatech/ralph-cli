@@ -46,6 +46,10 @@ const (
 	EventToolCall        = "tool_call"
 	EventCommit          = "commit"
 	EventPush            = "push"
+	// EventPushSkipped is emitted when the loop intentionally does not
+	// run `git push` (e.g. no origin remote configured). Added in v0.1.2
+	// (issue #8); additive, not a breaking change to the schema.
+	EventPushSkipped     = "push.skipped"
 	EventAbortRequested  = "abort.requested"
 	EventError           = "error"
 )
