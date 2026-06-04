@@ -234,30 +234,11 @@ func TestIntegrationPlanInvokesClaude(t *testing.T) {
 	}
 }
 
-func TestIntegrationAbortSentinel(t *testing.T) {
-	bin := ralphBin(t)
-	dir := t.TempDir()
-	mkdir(t, filepath.Join(dir, ".git"))
-	runRalph(t, bin, "init", dir)
-
-	cmd := exec.Command(bin, "abort", dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("ralph abort: %v\n%s", err, out)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".ralph", "ABORT_REQUESTED")); err != nil {
-		t.Errorf("ABORT_REQUESTED not created: %v", err)
-	}
-
-	// Now plan should exit 2 because sentinel is present.
-	cmd = exec.Command(bin, "plan", "--max-iterations", "1", "--no-push", dir)
-	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH"))
-	out, _ := cmd.CombinedOutput()
-	_ = out
-	if cmd.ProcessState.ExitCode() != 2 {
-		t.Errorf("plan with abort sentinel: got exit %d, want 2 (stderr+stdout: %s)",
-			cmd.ProcessState.ExitCode(), out)
-	}
-}
+// (TestIntegrationAbortSentinel was removed in v0.1.3 — issue #14 fix.
+// The abort-sentinel behavior is now covered by TestRunAbortMidLoop in
+// internal/loop/loop_test.go, which exercises Run() directly with a mock
+// harness and pre-created sentinel. No real `claude` binary required,
+// so CI no longer needs to install the harness just to run this test.)
 
 func TestIntegrationInitRejectsNonGit(t *testing.T) {
 	bin := ralphBin(t)
