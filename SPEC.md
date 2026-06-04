@@ -563,6 +563,7 @@ warnings).
 | `tool_call` | Tool call from Claude Code (parsed from stream-json) | `{ "tool": "Read", "input_summary": "Read .ralph/PROMPT_build.md" }` |
 | `commit` | A commit was made | `{ "sha": "abc1234", "message": "Add user auth", "files_changed": 3 }` |
 | `push` | A push was made | `{ "remote": "origin", "branch": "main", "sha": "abc1234" }` |
+| `push.skipped` | A push was intentionally not executed (e.g. no origin remote); audit event for traceability | `{ "reason": "no_origin_remote" }` |
 | `abort.requested` | Sentinel file detected | `{ "sentinel": ".ralph/ABORT_REQUESTED" }` |
 | `error` | An error occurred | `{ "code": "harness_missing", "message": "claude not found on PATH" }` |
 
