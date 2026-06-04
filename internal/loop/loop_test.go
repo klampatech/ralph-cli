@@ -442,3 +442,72 @@ func TestGitPushSkipsWhenNoOrigin(t *testing.T) {
 		t.Errorf("gitPush should NOT print 'git push failed' when no origin, got:\n%s", out)
 	}
 }
+
+// TestLoopEmitsPushSkippedOnAgentBashCommit verifies that when the
+// agent has already committed via its own git call (bypassing
+// gitCommit helper) and the project has no origin, the loop still
+// emits EventPushSkipped via the NDJSON audit stream.
+//
+// Regression test for issue #18: the previous `if !opt.NoPush &&
+// committed` gate at loop.go:201 blocked gitPush when ralph-cli's
+// gitCommit helper saw nothing staged (because the agent had
+// already committed). The fix removes the gate, so gitPush now
+// runs and emits push.skipped for the no-origin case regardless
+// of whether the commit came from ralph-cli or the agent's
+// shell call.
+func TestLoopEmitsPushSkippedOnAgentBashCommit(t *testing.T) {
+	dir := t.TempDir()
+	mustRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	mustRun("init", "-q")
+	mustRun("config", "user.email", "t@t")
+	mustRun("config", "user.name", "t")
+	// No origin remote — this is the condition under test.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun("add", "-A")
+	mustRun("commit", "-q", "-m", "init")
+
+	// Simulate the agent committing via its own shell call (which is
+	// the common case — PROMPT_build.md tells the agent to do this).
+	// After this commit, ralph-cli's gitCommit helper would return
+	// false on a subsequent call because nothing is staged.
+	if err := os.WriteFile(filepath.Join(dir, "agent.txt"), []byte("agent bash commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun("add", "-A")
+	mustRun("commit", "-q", "-m", "agent did work via bash")
+
+	// Capture NDJSON output by giving the emitter a real writer.
+	var ndjson bytes.Buffer
+	emitter := events.NewEmitter(&ndjson, events.NewSessionID(), dir)
+
+	// Call gitPush directly (simulating the loop's post-iter push
+	// attempt). Per the v0.1.3 fix, this is now called even when
+	// gitCommit returned false (i.e. the agent already committed).
+	gitPush(dir, emitter, Options{Stderr: io.Discard})
+
+	// Assert push.skipped event appears in the NDJSON output with
+	// the expected payload per SPEC §9.2.
+	out := ndjson.String()
+	if !strings.Contains(out, `"event":"push.skipped"`) {
+		t.Errorf("expected push.skipped event in NDJSON output, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"reason":"no_origin_remote"`) {
+		t.Errorf("expected reason=no_origin_remote in NDJSON output, got:\n%s", out)
+	}
+	if strings.Contains(out, `"event":"push"`) {
+		t.Errorf("did NOT expect a push event when no origin remote, got:\n%s", out)
+	}
+}

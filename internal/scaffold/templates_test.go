@@ -110,3 +110,61 @@ func TestPROMPTBuildMandatesPlanUpdate(t *testing.T) {
 		t.Error("PROMPT_build.md plan-update rule should mention flipping to [x]")
 	}
 }
+
+// TestPROMPTBuildDoesNotReferencePrdJson guards against the v0.1.2 prompt
+// regression where rule 9999999 referenced `prd.json`, a file the v0.1.x
+// scaffold does not create (SPEC §13 defers the schema to v0.2). v0.1.3
+// removed the prd.json reference and reworded the rule to use
+// `IMPLEMENTATION_PLAN.md` (issue #16).
+func TestPROMPTBuildDoesNotReferencePrdJson(t *testing.T) {
+	data, err := Read("templates/PROMPT_build.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	// Rule 9999999 must still exist (regression guard against accidentally
+	// deleting the throttle policy altogether).
+	if !strings.Contains(s, "9999999.") {
+		t.Error("PROMPT_build.md missing the 9999999. tag-policy rule")
+	}
+	// The new rule (starting at the 9999999. prefix) should reference
+	// IMPLEMENTATION_PLAN.md, not prd.json. We isolate the rule body by
+	// splitting on rule-number prefixes to avoid matching the "(Note: ...
+	// referenced `prd.json`)" deprecation comment that the v0.1.3 fix
+	// added for human readers.
+	var ruleBody string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "9999999.") {
+			// Collect this line + subsequent non-rule-number lines until
+			// the next rule-number prefix.
+			lines := []string{line}
+			rest := strings.Split(s, line+"\n")
+			if len(rest) < 2 {
+				break
+			}
+			for _, l := range strings.Split(rest[1], "\n") {
+				t := strings.TrimSpace(l)
+				if t == "" {
+					continue
+				}
+				// Stop at the next rule (which starts with digits followed
+				// by a dot).
+				if len(t) > 1 && t[0] >= '0' && t[0] <= '9' {
+					break
+				}
+				lines = append(lines, l)
+			}
+			ruleBody = strings.Join(lines, "\n")
+			break
+		}
+	}
+	if ruleBody == "" {
+		t.Fatal("could not locate rule 9999999 body in PROMPT_build.md")
+	}
+	if strings.Contains(ruleBody, "prd.json") {
+		t.Errorf("PROMPT_build.md rule 9999999 still references prd.json; v0.1.x scaffold does not create it. Rule body:\n%s", ruleBody)
+	}
+	if !strings.Contains(ruleBody, "IMPLEMENTATION_PLAN.md") {
+		t.Errorf("PROMPT_build.md rule 9999999 should reference IMPLEMENTATION_PLAN.md. Rule body:\n%s", ruleBody)
+	}
+}

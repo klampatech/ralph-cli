@@ -192,16 +192,44 @@ func Run(ctx context.Context, root string, h harness.Harness, opt Options) (int,
 			return 1, err
 		}
 
-		// Commit + push (build mode only, unless --no-commit/--no-push).
-		if opt.Mode == ModeBuild {
-			committed := false
-			if !opt.NoCommit {
-				committed = gitCommit(root, iter, opt)
-			}
-			if !opt.NoPush && committed {
-				gitPush(root, emitter, opt)
+	// Commit + push (build mode only, unless --no-commit/--no-push).
+	//
+	// Fix (v0.1.3, issue #18): we no longer gate gitPush on `committed`.
+	// The agent routinely commits via its own `git commit` shell call
+	// (PROMPT_build.md tells it to), which means ralph-cli's gitCommit
+	// helper sees nothing staged, returns false, and the previous
+	// `&& committed` gate prevented gitPush from running at all. The
+	// result: EventPushSkipped was never emitted for the no-origin
+	// case, and the audit stream was silent about agent-bash-commits.
+	//
+	// Now: capture pre-iter HEAD; after gitCommit, check if HEAD
+	// advanced (which means the agent committed via bash). In either
+	// case (ralph-cli committed or agent committed), proceed to
+	// gitPush — it has its own no-op semantics (no origin → emit
+	// push.skipped; remote up-to-date → silent; new commits → push +
+	// emit push).
+	if opt.Mode == ModeBuild {
+		prevSHA, _ := lastCommitSHA(root) // capture pre-iter HEAD
+
+		if !opt.NoCommit {
+			gitCommit(root, iter, opt, emitter) // emits EventCommit on its own if it committed
+		} else {
+			// --no-commit set, so the agent might have committed via bash.
+			// Detect and emit the audit event so the audit stream stays honest.
+			if curSHA, err := lastCommitSHA(root); err == nil && curSHA != prevSHA {
+				// Agent committed via bash. Emit EventCommit on its behalf.
+				_ = emitter.Info(events.EventCommit, map[string]string{
+					"sha":           curSHA,
+					"message":       "<agent bash commit — message not captured>",
+					"files_changed": "0", // unknown without `git show`; could refine
+				})
 			}
 		}
+
+		if !opt.NoPush {
+			gitPush(root, emitter, opt) // emit EventPushSkipped if no origin
+		}
+	}
 
 		// Update state (SPEC §7.1 step 6).
 		st.LoopCount++
@@ -410,7 +438,14 @@ func buildPrompt(root string, mode Mode, iter int, st state.State) (string, erro
 //
 // Per SPEC §7.3, the message comes from the harness's last stdout line
 // if non-empty, else "ralph: iteration <N>".
-func gitCommit(root string, iter int, opt Options) bool {
+//
+// Fix (v0.1.3, issue #18): the function now takes an emitter and
+// emits EventCommit on a successful commit. Previously, EventCommit
+// was defined in internal/events/events.go:47 but never emitted
+// anywhere — a v0.1.2 schema-contract gap. The audit stream now
+// reflects every commit the loop made, with {sha, message,
+// files_changed} payload matching SPEC §9.2.
+func gitCommit(root string, iter int, opt Options, emitter *events.Emitter) bool {
 	// git add everything EXCEPT .ralph/ (SPEC §3.3: "stage all changes in
 	// the project root (NOT in .ralph/)"). We do this by adding all and
 	// then unstaging .ralph/.
@@ -454,6 +489,25 @@ func gitCommit(root string, iter int, opt Options) bool {
 	if out, err := commit.CombinedOutput(); err != nil {
 		fmt.Fprintf(opt.Stderr, "ralph: git commit failed: %v\n%s\n", err, out)
 		return false
+	}
+
+	// Emit EventCommit audit event (SPEC §9.2). Capture the new SHA +
+	// file count for the payload. Best-effort: emitter errors are
+	// swallowed (the commit already succeeded; the event is for audit).
+	if emitter != nil {
+		sha, _ := lastCommitSHA(root)
+		filesChanged := 0
+		if showOut, err := exec.Command("git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").CombinedOutput(); err == nil {
+			filesChanged = len(strings.Split(strings.TrimSpace(string(showOut)), "\n"))
+			if filesChanged == 1 && strings.TrimSpace(string(showOut)) == "" {
+				filesChanged = 0
+			}
+		}
+		_ = emitter.Info(events.EventCommit, map[string]string{
+			"sha":           sha,
+			"message":       msg,
+			"files_changed": fmt.Sprintf("%d", filesChanged),
+		})
 	}
 	return true
 }
